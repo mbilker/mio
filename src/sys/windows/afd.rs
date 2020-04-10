@@ -1,6 +1,6 @@
 use lazy_static::lazy_static;
 use ntapi::ntioapi::{IO_STATUS_BLOCK_u, IO_STATUS_BLOCK};
-use ntapi::ntioapi::{NtCancelIoFileEx, NtDeviceIoControlFile};
+use ntapi::ntioapi::{NtCancelIoFile, NtDeviceIoControlFile};
 use ntapi::ntrtl::RtlNtStatusToDosError;
 use std::ffi::OsStr;
 use std::fmt;
@@ -135,11 +135,7 @@ impl Afd {
             return Ok(());
         }
 
-        let mut cancel_iosb = IO_STATUS_BLOCK {
-            u: IO_STATUS_BLOCK_u { Status: 0 },
-            Information: 0,
-        };
-        let status = NtCancelIoFileEx(self.fd.as_raw_handle(), iosb, &mut cancel_iosb);
+        let status = NtCancelIoFile(self.fd.as_raw_handle(), iosb);
         if status == STATUS_SUCCESS || status == STATUS_NOT_FOUND {
             return Ok(());
         }
