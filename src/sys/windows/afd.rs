@@ -149,15 +149,58 @@ cfg_net! {
     use miow::iocp::CompletionPort;
     use ntapi::ntioapi::FILE_OPEN;
     use ntapi::ntioapi::NtCreateFile;
-    use std::mem::zeroed;
+    use std::ffi::CString;
+    use std::mem::{self, zeroed};
     use std::os::windows::io::{FromRawHandle, RawHandle};
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use winapi::um::libloaderapi::{GetModuleHandleW, GetProcAddress};
+    use winapi::shared::minwindef::{BOOL, UCHAR, TRUE};
     use winapi::um::handleapi::INVALID_HANDLE_VALUE;
-    use winapi::um::winbase::{SetFileCompletionNotificationModes, FILE_SKIP_SET_EVENT_ON_HANDLE};
+    use winapi::um::winbase::FILE_SKIP_SET_EVENT_ON_HANDLE;
     use winapi::um::winnt::SYNCHRONIZE;
     use winapi::um::winnt::{FILE_SHARE_READ, FILE_SHARE_WRITE};
 
     static NEXT_TOKEN: AtomicUsize = AtomicUsize::new(0);
+
+    fn lookup(module: &str, symbol: &str) -> Option<usize> {
+        let mut module: Vec<u16> = module.encode_utf16().collect();
+        module.push(0);
+
+        let symbol = CString::new(symbol).unwrap();
+
+        unsafe {
+            let handle = GetModuleHandleW(module.as_ptr());
+
+            match GetProcAddress(handle, symbol.as_ptr()) as usize {
+                0 => None,
+                n => Some(n),
+            }
+        }
+    }
+
+    unsafe fn set_file_completion_notification_modes(file_handle: HANDLE, flags: UCHAR) -> BOOL {
+        static PTR: AtomicUsize = AtomicUsize::new(0);
+
+        type F = unsafe extern "system" fn(_: HANDLE, _: UCHAR) -> BOOL;
+
+        unsafe extern "system" fn fallback(_: HANDLE, _: UCHAR) -> BOOL {
+            TRUE
+        }
+
+        let addr = match PTR.load(Ordering::SeqCst) {
+            0 => {
+                let value = lookup("kernel32", "SetFileCompletionNotificationModes")
+                    .unwrap_or(fallback as usize);
+
+                PTR.store(value, Ordering::SeqCst);
+
+                value
+            },
+            n => n,
+        };
+
+        mem::transmute::<usize, F>(addr)(file_handle, flags)
+    }
 
     impl AfdPollInfo {
         pub fn zeroed() -> AfdPollInfo {
@@ -197,7 +240,7 @@ cfg_net! {
                 let token = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed) + 1;
                 let afd = Afd { fd };
                 cp.add_handle(token, &afd.fd)?;
-                match SetFileCompletionNotificationModes(
+                match set_file_completion_notification_modes(
                     afd_helper_handle,
                     FILE_SKIP_SET_EVENT_ON_HANDLE,
                 ) {
