@@ -640,7 +640,17 @@ cfg_net! {
                 None,
             ) == SOCKET_ERROR
             {
-                Err(io::Error::last_os_error())
+                use winapi::um::winsock2::{WSAGetLastError, WSAEINVAL};
+
+                let wsa_error = WSAGetLastError();
+                let res = Err(io::Error::last_os_error());
+
+                // Windows XP does not support the `SIO_BASE_HANDLE` command
+                if wsa_error == WSAEINVAL {
+                    Ok(raw_socket)
+                } else {
+                    res
+                }
             } else {
                 Ok(base_socket)
             }
